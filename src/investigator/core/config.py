@@ -74,8 +74,24 @@ class Config:
         return f"https://github.com/{Config.DEFAULT_ORG_NAME}" 
     
     # Workflow configuration
-    WORKFLOW_CHUNK_SIZE = 8  # Number of sub-workflows to run in parallel 
+    WORKFLOW_CHUNK_SIZE = 8  # Number of sub-workflows to run in parallel
     WORKFLOW_SLEEP_HOURS = 6  # Hours to sleep between workflow executions
+
+    # Cross-repo diagram generation
+    CREATE_DIAGRAMS = os.getenv("CREATE_DIAGRAMS", "false").lower() == "true"
+
+    # Mermaid PNG rendering (requires Docker with repo-swarm-mermaid image, or local mmdc)
+    RENDER_MERMAID_PNGS = os.getenv("RENDER_MERMAID_PNGS", "false").lower() == "true"
+    MERMAID_DOCKER_IMAGE = os.getenv("MERMAID_DOCKER_IMAGE", "repo-swarm-mermaid:local")
+    MERMAID_RENDER_TIMEOUT = int(os.getenv("MERMAID_RENDER_TIMEOUT", "120"))
+
+    # Local mode configuration
+    LOCAL_MODE = os.getenv("LOCAL_MODE", "false").lower() == "true"
+    LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "outputs")
+
+    # AI mode toggle -- when False, uses static analysis instead of Claude API
+    # No ANTHROPIC_API_KEY required when ENABLE_AI=false
+    ENABLE_AI = os.getenv("ENABLE_AI", "true").lower() == "true"
     
     @staticmethod
     def validate_claude_model(model_name: str) -> str:

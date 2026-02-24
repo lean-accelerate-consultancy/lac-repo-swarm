@@ -4,13 +4,15 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from activities.investigate_activities import read_repos_config, update_repos_list
 from workflows.investigate_single_repo_workflow import InvestigateSingleRepoWorkflow
+from workflows.cross_repo_analysis_workflow import CrossRepoAnalysisWorkflow
 from workflow_config import WorkflowConfig
 from models import (
     InvestigateReposRequest,
     InvestigateReposResult,
     InvestigateSingleRepoRequest,
     InvestigateSingleRepoResult,
-    ConfigOverrides
+    ConfigOverrides,
+    CrossRepoAnalysisRequest,
 )
 import logging
 from datetime import timedelta
@@ -100,8 +102,15 @@ class InvestigateReposWorkflow:
         if force_current:
             logger.info("⚡ Running with force flag - ignoring cache for this iteration")
         
+        # Extract local mode settings
+        local_mode = request.local_mode if request else False
+        output_dir = request.output_dir if request else None
+
         # Run the investigation for this cycle
-        result = await self._run_investigation(force=force_current, config_overrides=config_overrides)
+        result = await self._run_investigation(
+            force=force_current, config_overrides=config_overrides,
+            local_mode=local_mode, output_dir=output_dir
+        )
         
         # Check if we should continue as new (Temporal's recommendation or after each cycle)
         should_continue = workflow.info().is_continue_as_new_suggested()
@@ -122,7 +131,9 @@ class InvestigateReposWorkflow:
             max_tokens=config_overrides.max_tokens,
             sleep_hours=config_overrides.sleep_hours,
             chunk_size=config_overrides.chunk_size,
-            iteration_count=iteration_count + 1
+            iteration_count=iteration_count + 1,
+            local_mode=local_mode,
+            output_dir=output_dir,
         )
         
         # Continue the workflow as a new execution
@@ -133,39 +144,47 @@ class InvestigateReposWorkflow:
         # This line should never be reached due to continue_as_new
         return result
     
-    async def _run_investigation(self, force: bool = False, config_overrides: ConfigOverrides = None) -> InvestigateReposResult:
+    async def _run_investigation(self, force: bool = False, config_overrides: ConfigOverrides = None,
+                                local_mode: bool = False, output_dir: str = None) -> InvestigateReposResult:
         """Execute a single investigation cycle.
-        
+
         Args:
             force: If True, forces investigation of all repos ignoring cache
             config_overrides: ConfigOverrides containing config overrides
+            local_mode: If True, use local repos and save results locally
+            output_dir: Local output directory (local mode)
         """
         if config_overrides is None:
             config_overrides = ConfigOverrides()
-            
-        # First, update the repository list to get the latest repos
-        logger.info("Updating repository list with latest repositories...")
-        update_result = await workflow.execute_activity(
-            update_repos_list,
-            start_to_close_timeout=timedelta(minutes=10),  # Allow up to 10 minutes for update
-            retry_policy=RetryPolicy(
-                maximum_attempts=2,  # Retry once if it fails
-                initial_interval=timedelta(seconds=5),
-                maximum_interval=timedelta(seconds=30),
-                backoff_coefficient=2.0
-            )
-        )
-        
-        # Check if update was successful
-        if update_result.get("status") == "failed":
-            logger.warning(f"Failed to update repository list: {update_result.get('error', 'Unknown error')}")
-            logger.info("Continuing with existing repos.json...")
+
+        # In local mode, skip the repos list update (no GitHub access needed)
+        if local_mode:
+            logger.info("📂 Local mode - skipping repository list update from GitHub")
+            update_result = {"status": "skipped", "message": "Local mode - update skipped"}
         else:
-            logger.info(f"Repository list updated: {update_result.get('message', 'Success')}")
-            if "total_repos" in update_result:
-                logger.info(f"Update summary: {update_result['total_repos']}")
-            if "new_repos" in update_result:
-                logger.info(f"New repositories: {update_result['new_repos']}")
+            # First, update the repository list to get the latest repos
+            logger.info("Updating repository list with latest repositories...")
+            update_result = await workflow.execute_activity(
+                update_repos_list,
+                start_to_close_timeout=timedelta(minutes=10),  # Allow up to 10 minutes for update
+                retry_policy=RetryPolicy(
+                    maximum_attempts=2,  # Retry once if it fails
+                    initial_interval=timedelta(seconds=5),
+                    maximum_interval=timedelta(seconds=30),
+                    backoff_coefficient=2.0
+                )
+            )
+
+            # Check if update was successful
+            if update_result.get("status") == "failed":
+                logger.warning(f"Failed to update repository list: {update_result.get('error', 'Unknown error')}")
+                logger.info("Continuing with existing repos.json...")
+            else:
+                logger.info(f"Repository list updated: {update_result.get('message', 'Success')}")
+                if "total_repos" in update_result:
+                    logger.info(f"Update summary: {update_result['total_repos']}")
+                if "new_repos" in update_result:
+                    logger.info(f"New repositories: {update_result['new_repos']}")
         
         # Read repos.json using activity (file operations not allowed in workflows)
         repos_data = await workflow.execute_activity(
@@ -224,15 +243,20 @@ class InvestigateReposWorkflow:
         window_size = config_overrides.chunk_size or WorkflowConfig.WORKFLOW_CHUNK_SIZE  # Maximum concurrent workflows
         repo_items = list(repositories.items())
         
-        # Filter out repos without URLs (and skip comment entries which are strings)
+        # Filter out repos without URIs (and skip comment entries which are strings)
+        # URI scheme determines local vs remote: file:// = local, https:// = remote
         valid_repos = []
         for repo_name, repo_info in repo_items:
             # Skip comment entries (strings) and non-dict entries
             if not isinstance(repo_info, dict):
                 continue
-            repo_url = repo_info.get("url")
-            if not repo_url:
-                logger.warning(f"No URL found for repository: {repo_name}")
+            repo_uri = repo_info.get("uri")
+            if not repo_uri:
+                logger.warning(f"No URI found for repository: {repo_name} (skipping)")
+                continue
+            # In local mode, require a file:// URI
+            if local_mode and not repo_uri.startswith("file://"):
+                logger.warning(f"Repository {repo_name} has no file:// URI (skipping in local mode)")
                 continue
             valid_repos.append((repo_name, repo_info))
         
@@ -256,18 +280,20 @@ class InvestigateReposWorkflow:
             chunk_info_map = {}
             
             for repo_name, repo_info in chunk:
-                repo_url = repo_info.get("url")
+                repo_uri = repo_info.get("uri")
                 repo_type = repo_info.get("type", "generic")
-                
+
                 logger.info(f"Starting investigation for repository: {repo_name} (type: {repo_type})")
-                
+
                 # Create Pydantic request model
                 request = InvestigateSingleRepoRequest(
                     repo_name=repo_name,
-                    repo_url=repo_url,
+                    repo_url=repo_uri,
                     repo_type=repo_type,
                     force=force,
-                    config_overrides=config_overrides
+                    config_overrides=config_overrides,
+                    local_mode=local_mode,
+                    output_dir=output_dir,
                 )
                 
                 # Start the child workflow (non-blocking)
@@ -285,7 +311,7 @@ class InvestigateReposWorkflow:
                 chunk_handles.append(handle)
                 chunk_info_map[handle] = {
                     "repo_name": repo_name,
-                    "repo_url": repo_url
+                    "repo_url": repo_uri
                 }
                 
                 # Yield control after starting each workflow to prevent timeout
@@ -356,50 +382,79 @@ class InvestigateReposWorkflow:
         logger.info(f"Workflow completed. Investigated {len(results)} repositories in parallel. "
                    f"Success: {success_count}, Failed: {failed_count}, Skipped: {skipped_count}")
         
-        # Only run architecture hub analysis if we have successful investigations (not skipped)
-        if success_count > 0:
-            logger.info(f"Starting architecture hub analysis child workflow ({len(results) - skipped_count} new investigations)")
-            
+        # Cross-repo Mermaid diagram generation (if CREATE_DIAGRAMS is enabled)
+        from investigator.core.config import Config
+        create_diagrams = Config.CREATE_DIAGRAMS
+
+        if success_count > 0 and create_diagrams:
+            logger.info(f"🎨 Starting cross-repo Mermaid diagram generation ({success_count} successful investigations)")
+
             try:
-                # Start the architecture hub analysis child workflow
-                # analysis_result = await workflow.execute_child_workflow(
-                #     AnalyzeArchitectureHubWorkflow.run,
-                #     id=f"analyze-arch-hub-{workflow.info().workflow_id}",
-                #     task_queue="investigate-task-queue",
-                #     retry_policy=RetryPolicy(maximum_attempts=2),
-                #     execution_timeout=timedelta(hours=1),
-                #     run_timeout=timedelta(minutes=45),
-                #     task_timeout=timedelta(minutes=25),
-                # )
-                
-                # summary.architecture_analysis = analysis_result
-                logger.info(f"Skipping architecture analysis - not implemented yet")
-                summary.architecture_analysis = {
-                    "status": "skipped",
-                    "message": "Architecture analysis not implemented yet"
-                }
-                
+                # Collect repo results with arch_file_content
+                repo_results_for_diagrams = []
+                for result in results:
+                    if result.arch_file_content:
+                        repo_results_for_diagrams.append({
+                            "repo_name": result.repo_name,
+                            "arch_file_content": result.arch_file_content
+                        })
+
+                # Build repos metadata from the repositories data
+                repos_metadata = {}
+                for repo_name, repo_info in valid_repos:
+                    repos_metadata[repo_name] = {
+                        "uri": repo_info.get("uri", ""),
+                        "type": repo_info.get("type", "generic"),
+                        "description": repo_info.get("description", "")
+                    }
+
+                cross_repo_request = CrossRepoAnalysisRequest(
+                    repo_results=repo_results_for_diagrams,
+                    repos_metadata=repos_metadata,
+                    config_overrides=config_overrides,
+                    local_mode=local_mode,
+                    output_dir=output_dir or Config.LOCAL_OUTPUT_DIR,
+                )
+
+                analysis_result = await workflow.execute_child_workflow(
+                    CrossRepoAnalysisWorkflow.run,
+                    args=[cross_repo_request],
+                    id=f"cross-repo-analysis-{workflow.info().workflow_id}",
+                    task_queue="investigate-task-queue",
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                    execution_timeout=timedelta(hours=1),
+                    run_timeout=timedelta(minutes=45),
+                    task_timeout=timedelta(minutes=25),
+                )
+
+                summary.architecture_analysis = analysis_result.model_dump()
+                logger.info(f"🎨 Cross-repo diagram generation completed: {analysis_result.message}")
+
             except Exception as e:
-                from investigator.core.config import Config
-                logger.error(f"Failed to analyze {Config.ARCH_HUB_REPO_NAME}: {str(e)}")
+                logger.error(f"Failed cross-repo diagram generation: {str(e)}")
                 summary.architecture_analysis = {
                     "status": "failed",
                     "error": str(e),
-                    "message": f"Failed to analyze {Config.ARCH_HUB_REPO_NAME}: {str(e)}"
+                    "message": f"Failed cross-repo diagram generation: {str(e)}"
                 }
+        elif success_count > 0 and not create_diagrams:
+            logger.info("Skipping cross-repo diagram generation - CREATE_DIAGRAMS is not enabled")
+            summary.architecture_analysis = {
+                "status": "skipped",
+                "message": "Cross-repo diagram generation not enabled (set CREATE_DIAGRAMS=true to enable)"
+            }
         else:
             if skipped_count == len(results):
-                logger.info(f"Skipping architecture analysis - all {skipped_count} repositories were skipped (cached)")
+                logger.info(f"Skipping cross-repo diagrams - all {skipped_count} repositories were skipped (cached)")
                 summary.architecture_analysis = {
-                    "status": "skipped", 
-                    "message": f"Architecture analysis skipped - all {skipped_count} repositories were cached/skipped"
+                    "status": "skipped",
+                    "message": f"Cross-repo diagrams skipped - all {skipped_count} repositories were cached/skipped"
                 }
             else:
-                from investigator.core.config import Config
-                logger.info(f"Skipping architecture analysis - no successful saves to {Config.ARCH_HUB_REPO_NAME}")
+                logger.info(f"Skipping cross-repo diagrams - no successful investigations")
                 summary.architecture_analysis = {
-                    "status": "skipped", 
-                    "message": "Architecture analysis skipped - no successful saves to hub"
+                    "status": "skipped",
+                    "message": "Cross-repo diagrams skipped - no successful investigations"
                 }
         
         return summary 

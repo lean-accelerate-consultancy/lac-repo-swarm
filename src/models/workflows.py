@@ -37,32 +37,36 @@ class ConfigOverrides(BaseModel):
 class InvestigateSingleRepoRequest(BaseModel):
     """Input parameters for single repository investigation workflow."""
     repo_name: str = Field(..., description="Name of the repository")
-    repo_url: str = Field(..., description="URL of the repository")
+    local_mode: bool = Field(default=False, description="If True, skip hub save and write results locally")
+    repo_url: str = Field(..., description="URI of the repository (file:// for local, https:// for remote)")
     repo_type: Optional[str] = Field(default="generic", description="Repository type")
     force: bool = Field(default=False, description="Force investigation even if cached")
     config_overrides: Optional[ConfigOverrides] = Field(None, description="Configuration overrides")
-    
+    output_dir: Optional[str] = Field(None, description="Local output directory for results (local mode)")
+
     @validator('repo_name')
     def validate_repo_name(cls, v):
         """Ensure repo name is not empty."""
         if not v or not v.strip():
             raise ValueError("Repository name must not be empty")
         return v.strip()
-    
+
     @validator('repo_url')
-    def validate_repo_url(cls, v):
-        """Ensure repo URL is valid."""
+    def validate_repo_url(cls, v, values):
+        """Ensure repo URI is valid (file:// for local, http(s):// for remote)."""
         if not v or not v.strip():
-            raise ValueError("Repository URL must not be empty")
-        if not (v.startswith('http://') or v.startswith('https://')):
-            raise ValueError("Repository URL must start with http:// or https://")
-        return v.strip()
+            raise ValueError("Repository URI must not be empty")
+        v = v.strip()
+        # Accept standard URI schemes: file://, http://, https://
+        if v.startswith('file://') or v.startswith('http://') or v.startswith('https://'):
+            return v
+        raise ValueError("Repository URI must start with file://, http://, or https://")
 
 
 class CloneRepositoryResult(BaseModel):
-    """Result from repository cloning operation."""
-    repo_path: str = Field(..., description="Path to the cloned repository")
-    temp_dir: str = Field(..., description="Temporary directory path")
+    """Result from repository cloning or local repo access operation."""
+    repo_path: str = Field(..., description="Path to the cloned/local repository")
+    temp_dir: Optional[str] = Field(None, description="Temporary directory path (None for local repos)")
     status: str = Field(default="success", description="Status of the operation")
     message: Optional[str] = Field(None, description="Optional status message")
 
@@ -118,12 +122,12 @@ class SaveToDynamoResult(BaseModel):
     message: str = Field(..., description="Description of the result")
     timestamp: Optional[float] = Field(None, description="Unix timestamp when saved")
     error: Optional[str] = Field(None, description="Error message if failed")
-    
+
     @validator('status')
     def validate_status(cls, v):
         """Ensure status is valid."""
-        if v not in ['success', 'failed']:
-            raise ValueError("Status must be 'success' or 'failed'")
+        if v not in ['success', 'failed', 'error']:
+            raise ValueError("Status must be 'success', 'failed', or 'error'")
         return v
 
 
@@ -207,6 +211,8 @@ class InvestigateReposRequest(BaseModel):
     sleep_hours: Optional[float] = Field(None, ge=0.1, le=168.0, description="Hours to sleep between executions")
     chunk_size: Optional[int] = Field(None, ge=1, le=100, description="Number of repos to process in parallel")
     iteration_count: int = Field(default=0, ge=0, description="Current iteration number")
+    local_mode: bool = Field(default=False, description="If True, use local repos and save results locally")
+    output_dir: Optional[str] = Field(None, description="Local output directory for results (local mode)")
     
     @validator('claude_model')
     def validate_claude_model(cls, v):
@@ -254,6 +260,32 @@ class InvestigateReposResult(BaseModel):
         """Ensure skipped count doesn't exceed total."""
         if 'total_repos' in values and v > values['total_repos']:
             raise ValueError("Skipped count cannot exceed total repositories")
+        return v
+
+
+class CrossRepoAnalysisRequest(BaseModel):
+    """Input parameters for cross-repo Mermaid diagram generation workflow."""
+    repo_results: List[Dict[str, Any]] = Field(..., description="List of repo analysis results [{repo_name, arch_file_content}]")
+    repos_metadata: Dict[str, Dict[str, str]] = Field(..., description="Repo metadata from repos.json {name: {uri, type, description}}")
+    config_overrides: Optional[ConfigOverrides] = Field(None, description="Configuration overrides")
+    local_mode: bool = Field(default=False, description="If True, write output locally instead of to architecture hub")
+    output_dir: Optional[str] = Field(None, description="Local output directory for diagrams (local mode)")
+
+
+class CrossRepoAnalysisResult(BaseModel):
+    """Result from cross-repo Mermaid diagram generation workflow."""
+    status: str = Field(..., description="Workflow status")
+    diagrams_file_path: Optional[str] = Field(None, description="Path to the generated diagrams file")
+    diagram_count: int = Field(default=0, ge=0, description="Number of diagrams generated")
+    hub_save_result: Optional[Dict[str, Any]] = Field(None, description="Result of saving to architecture hub (online mode)")
+    message: str = Field(..., description="Human-readable message")
+
+    @validator('status')
+    def validate_status(cls, v):
+        """Ensure status is valid."""
+        valid_statuses = ['success', 'failed', 'skipped']
+        if v not in valid_statuses:
+            raise ValueError(f"Status must be one of {valid_statuses}")
         return v
 
 

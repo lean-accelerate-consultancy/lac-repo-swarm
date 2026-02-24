@@ -553,7 +553,7 @@ class InvestigationCache:
         except Exception as e:
             self.logger.error(f"💥 METADATA ERROR: Failed to save investigation metadata: {e}")
             return {
-                "status": "error",
+                "status": "failed",
                 "message": f"Failed to save investigation metadata: {str(e)}",
                 "timestamp": None
             }

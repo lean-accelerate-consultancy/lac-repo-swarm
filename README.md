@@ -133,12 +133,12 @@ Edit `prompts/repos.json` to add repositories for analysis:
 {
   "repositories": {
     "my-backend": {
-      "url": "https://github.com/org/my-backend",
+      "uri": "https://github.com/org/my-backend",
       "type": "backend",
       "description": "Main API service"
     },
     "my-frontend": {
-      "url": "https://github.com/org/my-frontend", 
+      "uri": "https://github.com/org/my-frontend",
       "type": "frontend",
       "description": "React web app"
     }

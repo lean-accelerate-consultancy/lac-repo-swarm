@@ -77,15 +77,15 @@ class SaveMetadataInput(BaseModel):
 
 class SaveMetadataOutput(BaseModel):
     """Output from save_investigation_metadata activity."""
-    status: str = Field(..., description="Status of the save operation (success/error)")
+    status: str = Field(..., description="Status of the save operation (success/failed/error)")
     message: str = Field(..., description="Description of the result")
     timestamp: Optional[float] = Field(None, description="Unix timestamp when saved")
-    
+
     @validator('status')
     def validate_status(cls, v):
         """Ensure status is valid."""
-        if v not in ['success', 'error']:
-            raise ValueError("Status must be 'success' or 'error'")
+        if v not in ['success', 'failed', 'error']:
+            raise ValueError("Status must be 'success', 'failed', or 'error'")
         return v
 
 
@@ -179,10 +179,11 @@ class ClaudeConfigOverrides(BaseModel):
 
 
 class AnalyzeWithClaudeInput(BaseModel):
-    """Input parameters for analyze_with_claude_context activity."""
+    """Input parameters for analyze_with_claude_context or analyze_with_static_context activity."""
     context_dict: PromptContextDict = Field(..., description="Dictionary representation of PromptContext")
     config_overrides: Optional[ClaudeConfigOverrides] = Field(None, description="Optional configuration overrides for Claude API")
     latest_commit: Optional[str] = Field(None, description="Current commit SHA for cache checking")
+    repo_path: Optional[str] = Field(None, description="Local repo path for static analysis mode (ENABLE_AI=false)")
     
     @validator('latest_commit')
     def validate_commit(cls, v):

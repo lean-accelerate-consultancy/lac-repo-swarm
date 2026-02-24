@@ -117,6 +117,53 @@ except ImportError as e:
     logger.error(f"  ✗ Failed to import DynamoDB health check activities: {e}")
     raise
 
+try:
+    from workflows.cross_repo_analysis_workflow import CrossRepoAnalysisWorkflow
+    logger.info("  ✓ Imported CrossRepoAnalysisWorkflow")
+except ImportError as e:
+    logger.error(f"  ✗ Failed to import CrossRepoAnalysisWorkflow: {e}")
+    raise
+
+try:
+    from activities.cross_repo_activities import (
+        get_cross_repo_prompts_config_activity,
+        read_local_arch_files_activity,
+        write_local_diagrams_activity,
+    )
+    logger.info("  ✓ Imported cross-repo activities")
+except ImportError as e:
+    logger.error(f"  ✗ Failed to import cross-repo activities: {e}")
+    raise
+
+try:
+    from activities.mermaid_render_activities import (
+        render_mermaid_pngs_activity,
+    )
+    logger.info("  ✓ Imported mermaid render activities")
+except ImportError as e:
+    logger.error(f"  ✗ Failed to import mermaid render activities: {e}")
+    raise
+
+try:
+    from activities.investigate_activities import (
+        use_local_repo_activity,
+        write_local_analysis_activity,
+    )
+    logger.info("  ✓ Imported local mode activities")
+except ImportError as e:
+    logger.error(f"  ✗ Failed to import local mode activities: {e}")
+    raise
+
+try:
+    from activities.static_analysis_activities import (
+        analyze_with_static_context,
+        generate_static_diagrams_activity,
+    )
+    logger.info("  ✓ Imported static analysis activities")
+except ImportError as e:
+    logger.error(f"  ✗ Failed to import static analysis activities: {e}")
+    raise
+
 logger.info("All imports successful!")
 
 # Health check file for ECS
@@ -226,9 +273,10 @@ async def main():
         # Run the worker for investigation workflows
         logger.info("Step 5: Creating worker instance...")
         logger.info(f"  Task queue: {config['task_queue']}")
-        logger.info(f"  Workflows: {[w.__name__ for w in [InvestigateReposWorkflow, InvestigateSingleRepoWorkflow]]}")
+        all_workflows = [InvestigateReposWorkflow, InvestigateSingleRepoWorkflow, CrossRepoAnalysisWorkflow]
+        logger.info(f"  Workflows: {[w.__name__ for w in all_workflows]}")
         all_activities = [
-            save_to_arch_hub, 
+            save_to_arch_hub,
             read_repos_config,
             update_repos_list,
             save_prompt_context_activity,
@@ -245,14 +293,26 @@ async def main():
             check_dynamodb_health,
             cleanup_old_health_checks,
             read_dependencies_activity,
-            cache_dependencies_activity
+            cache_dependencies_activity,
+            # Local mode activities
+            use_local_repo_activity,
+            write_local_analysis_activity,
+            # Cross-repo activities
+            get_cross_repo_prompts_config_activity,
+            read_local_arch_files_activity,
+            write_local_diagrams_activity,
+            # Mermaid PNG rendering
+            render_mermaid_pngs_activity,
+            # Static analysis (ENABLE_AI=false)
+            analyze_with_static_context,
+            generate_static_diagrams_activity,
         ]
         logger.info(f"  Activities: {[a.__name__ for a in all_activities]}")
-        
+
         worker = Worker(
             client,
             task_queue=config['task_queue'],
-            workflows=[InvestigateReposWorkflow, InvestigateSingleRepoWorkflow],
+            workflows=all_workflows,
             activities=all_activities,
         )
         logger.info("✓ Worker instance created successfully!")

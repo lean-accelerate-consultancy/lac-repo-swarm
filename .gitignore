@@ -203,3 +203,9 @@ temp/
 # Graph analysis files
 src/investigator/graph/arch_files/
 src/investigator/graph/graph_json/
+
+# Generated analysis outputs
+outputs*/
+
+# Repo config
+prompts/repos.json

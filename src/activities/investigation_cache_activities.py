@@ -146,15 +146,15 @@ async def save_investigation_metadata(
         activity.logger.info(f"✅ ACTIVITY RESULT: save_investigation_metadata status={result.get('status')}")
         # Convert to SaveMetadataOutput model
         return SaveMetadataOutput(
-            status=result.get('status', 'error'),
+            status=result.get('status', 'failed'),
             message=result.get('message', ''),
             timestamp=result.get('timestamp')
         )
-        
+
     except Exception as e:
         activity.logger.error(f"💥 ACTIVITY ERROR: Failed to save investigation metadata: {e}")
         return SaveMetadataOutput(
-            status="error",
+            status="failed",
             message=f"Failed to save investigation metadata: {str(e)}",
             timestamp=None
         )

@@ -1,0 +1,38 @@
+# Minimal Docker image for rendering Mermaid diagrams to PNG
+# Uses Debian slim with Chromium + mermaid-cli (Chromium requires /proc, /dev/shm
+# and crash handlers that are incompatible with true distroless images)
+#
+# Build: docker build -f Dockerfile.mermaid -t repo-swarm-mermaid:local .
+# Usage: docker run --rm -v /host/path:/data repo-swarm-mermaid:local -i /data/input.mmd -o /data/output.png
+
+FROM node:20-bookworm-slim
+
+# Install Chromium and rendering dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-freefont-ttf \
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r mermaid && useradd -r -g mermaid -G audio,video mermaid \
+    && mkdir -p /home/mermaid && chown -R mermaid:mermaid /home/mermaid
+
+# Install mermaid-cli
+WORKDIR /app
+RUN npm init -y && npm install @mermaid-js/mermaid-cli \
+    && npm cache clean --force
+
+# Create puppeteer config for container environment
+RUN echo '{ "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] }' > /app/puppeteer-config.json
+
+# Point Puppeteer to system Chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
+# Run as non-root
+USER mermaid
+
+WORKDIR /data
+
+ENTRYPOINT ["/app/node_modules/.bin/mmdc", "-p", "/app/puppeteer-config.json"]

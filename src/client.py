@@ -16,18 +16,21 @@ from models import InvestigateReposRequest, InvestigateSingleRepoRequest, Config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def run_investigate_repos_workflow(client: Client, force: bool = False, 
-                                      claude_model: str = None, max_tokens: int = None, 
-                                      sleep_hours: float = None, chunk_size: int = None):
+async def run_investigate_repos_workflow(client: Client, force: bool = False,
+                                      claude_model: str = None, max_tokens: int = None,
+                                      sleep_hours: float = None, chunk_size: int = None,
+                                      local_mode: bool = False, output_dir: str = None):
     """Run the InvestigateReposWorkflow. Runs continuously every X hours.
-    
+
     Args:
         client: Temporal client instance
         force: If True, forces investigation of all repos ignoring cache on first iteration
         claude_model: Optional Claude model override
-        max_tokens: Optional max tokens override  
+        max_tokens: Optional max tokens override
         sleep_hours: Optional sleep hours override (supports fractional hours)
         chunk_size: Optional chunk size override (number of repos processed in parallel)
+        local_mode: If True, scan local repos and save results locally (no GitHub/hub)
+        output_dir: Local output directory for results and diagrams
     """
     from datetime import datetime
     
@@ -43,7 +46,11 @@ async def run_investigate_repos_workflow(client: Client, force: bool = False,
     
     if force:
         logger.info("🚀 Force flag enabled - will force investigation of all repositories on first run")
-    
+
+    if local_mode:
+        logger.info("📂 Local mode enabled - scanning local repos, saving results locally")
+        logger.info(f"📁 Output directory: {output_dir or 'outputs'}")
+
     # Create Pydantic request model instead of dictionary
     request = InvestigateReposRequest(
         force=force,
@@ -51,7 +58,9 @@ async def run_investigate_repos_workflow(client: Client, force: bool = False,
         max_tokens=max_tokens,
         sleep_hours=sleep_hours,
         chunk_size=chunk_size,
-        iteration_count=0
+        iteration_count=0,
+        local_mode=local_mode,
+        output_dir=output_dir
     )
     
     if claude_model:
@@ -66,13 +75,16 @@ async def run_investigate_repos_workflow(client: Client, force: bool = False,
     if chunk_size:
         logger.info(f"🔧 Chunk size override: {chunk_size}")
     
+    # Local mode runs once; online mode runs continuously
+    exec_timeout = timedelta(hours=12) if local_mode else timedelta(days=365)
+
     result = await client.execute_workflow(
         InvestigateReposWorkflow.run,
         request,
         id=workflow_id,
         task_queue=task_queue,
         task_timeout=timedelta(minutes=60),  # 60 minutes for workflow task execution
-        execution_timeout=timedelta(days=365),  # Long timeout for continuous mode
+        execution_timeout=exec_timeout,
     )
     logger.info(f"InvestigateReposWorkflow result: {result}")
     return result
@@ -131,20 +143,20 @@ async def run_investigate_single_repo_workflow(client: Client, repo_identifier: 
             
             repo_info = repositories[repo_identifier]
             repo_name = repo_identifier
-            repo_url = repo_info.get("url")
+            repo_url = repo_info.get("uri")
             detected_repo_type = repo_info.get("type", "generic")
-            
+
             if not repo_url:
-                logger.error(f"No URL found for repository: {repo_identifier}")
-                return {"status": "failed", "error": f"No URL found for repository: {repo_identifier}"}
-        
+                logger.error(f"No URI found for repository: {repo_identifier}")
+                return {"status": "failed", "error": f"No URI found for repository: {repo_identifier}"}
+
         except Exception as e:
             logger.error(f"Error reading repos.json: {str(e)}")
             return {"status": "failed", "error": f"Error reading repos.json: {str(e)}"}
-    
+
     if not repo_url:
-        logger.error(f"No URL found for repository: {repo_identifier}")
-        return {"status": "failed", "error": f"No URL found for repository: {repo_identifier}"}
+        logger.error(f"No URI found for repository: {repo_identifier}")
+        return {"status": "failed", "error": f"No URI found for repository: {repo_identifier}"}
     
     # Use provided repo_type or fall back to detected type
     final_repo_type = repo_type or detected_repo_type
@@ -298,21 +310,62 @@ async def main():
                 elif arg.startswith("--force-section="):
                     force_section = arg.split("=", 1)[1]
             
-            await run_investigate_single_repo_workflow(client, repo_identifier, force=force, 
-                                                     claude_model=claude_model, max_tokens=max_tokens, 
+            await run_investigate_single_repo_workflow(client, repo_identifier, force=force,
+                                                     claude_model=claude_model, max_tokens=max_tokens,
                                                      repo_type=repo_type, force_section=force_section)
+        elif workflow_name == "investigate-local":
+            # Local mode: scan local repos, analyse with Claude, save results locally
+            # Parse configuration overrides from command line
+            force = "--force" in sys.argv
+            claude_model = None
+            max_tokens = None
+            chunk_size = None
+            output_dir = None
+
+            for arg in sys.argv[2:]:
+                if arg.startswith("--claude-model="):
+                    claude_model = arg.split("=", 1)[1]
+                elif arg.startswith("--max-tokens="):
+                    try:
+                        max_tokens = int(arg.split("=", 1)[1])
+                    except ValueError:
+                        logger.error(f"Invalid max-tokens value: {arg.split('=', 1)[1]}. Must be an integer.")
+                        return
+                elif arg.startswith("--chunk-size="):
+                    try:
+                        chunk_size = int(arg.split("=", 1)[1])
+                    except ValueError:
+                        logger.error(f"Invalid chunk-size value: {arg.split('=', 1)[1]}. Must be an integer.")
+                        return
+                elif arg.startswith("--output-dir="):
+                    output_dir = arg.split("=", 1)[1]
+
+            logger.info("🏠 Starting local mode investigation...")
+            logger.info("Local repos are configured via file:// URIs in repos.json")
+            await run_investigate_repos_workflow(
+                client, force=force, claude_model=claude_model,
+                max_tokens=max_tokens, chunk_size=chunk_size,
+                local_mode=True, output_dir=output_dir
+            )
         else:
             logger.error(f"Unknown workflow: {workflow_name}")
-            logger.info("Available workflows: investigate, investigate-single")
+            logger.info("Available workflows: investigate, investigate-single, investigate-local")
             logger.info("Usage: python client.py investigate [--force] [--claude-model=MODEL] [--max-tokens=NUM] [--sleep-hours=NUM] [--chunk-size=NUM]")
             logger.info("Usage: python client.py investigate-single REPO_NAME_OR_URL [options]")
+            logger.info("Usage: python client.py investigate-local [--force] [--claude-model=MODEL] [--max-tokens=NUM] [--chunk-size=NUM] [--output-dir=DIR]")
     else:
         # Default to investigate workflow
         logger.info("No arguments provided. Running investigate workflow.")
         logger.info("The workflow will run continuously every X hours.")
-        logger.info("Use 'python client.py investigate --force' to force investigation of all repos.")
-        logger.info("Config overrides: --claude-model=MODEL --max-tokens=NUM --sleep-hours=NUM --chunk-size=NUM")
-        logger.info("For single repository investigation: python client.py investigate-single REPO_NAME_OR_URL [options]")
+        logger.info("")
+        logger.info("Available commands:")
+        logger.info("  investigate        - Run multi-repo investigation (continuous, online mode)")
+        logger.info("  investigate-single - Run single repo investigation")
+        logger.info("  investigate-local  - Run multi-repo investigation in local mode (scan local repos)")
+        logger.info("")
+        logger.info("Usage: python client.py investigate [--force] [--claude-model=MODEL] [--max-tokens=NUM] [--sleep-hours=NUM] [--chunk-size=NUM]")
+        logger.info("Usage: python client.py investigate-single REPO_NAME_OR_URL [--force] [--claude-model=MODEL] [--max-tokens=NUM] [--repo-type=TYPE]")
+        logger.info("Usage: python client.py investigate-local [--force] [--claude-model=MODEL] [--max-tokens=NUM] [--chunk-size=NUM] [--output-dir=DIR]")
         await run_investigate_repos_workflow(client)
 
 if __name__ == "__main__":

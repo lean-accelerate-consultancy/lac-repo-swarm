@@ -34,11 +34,14 @@ mise run dev-server &
 SERVER_PID=$!
 sleep 5
 
-# Check if API key is set
-if [ -z "$ANTHROPIC_API_KEY" ]; then
+# Check if API key is set (only required when AI mode is enabled)
+if [[ "${ENABLE_AI}" == "false" ]]; then
+    echo "🔧 ENABLE_AI=false -- static analysis mode (no Claude API key required)"
+elif [ -z "$ANTHROPIC_API_KEY" ]; then
     echo "❌ Error: ANTHROPIC_API_KEY environment variable is not set"
     echo "Please set your Claude API key:"
     echo "export ANTHROPIC_API_KEY='your-api-key-here'"
+    echo "Or set ENABLE_AI=false for static analysis mode (no API key needed)"
     exit 1
 fi
 

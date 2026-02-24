@@ -1,0 +1,29 @@
+{
+  "processing_order": [
+    {
+      "name": "network_architecture_diagram",
+      "file": "network_architecture.md",
+      "description": "Network/architecture diagram showing how repos/services connect",
+      "input_sections": ["hl_overview", "APIs", "events", "service_dependencies"]
+    },
+    {
+      "name": "sequence_diagrams",
+      "file": "sequence_diagrams.md",
+      "description": "Sequence diagrams showing request flows across services",
+      "input_sections": ["APIs", "events", "service_dependencies"],
+      "context": [
+        {"type": "step", "val": "network_architecture_diagram"}
+      ]
+    },
+    {
+      "name": "data_flow_diagrams",
+      "file": "data_flow_diagrams.md",
+      "description": "Data flow diagrams showing how data moves between repos",
+      "input_sections": ["data_mapping", "service_dependencies", "DBs"],
+      "context": [
+        {"type": "step", "val": "network_architecture_diagram"},
+        {"type": "step", "val": "sequence_diagrams"}
+      ]
+    }
+  ]
+}

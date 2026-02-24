@@ -12,7 +12,7 @@ import uuid
 from activities.investigate_activities import (
     save_to_arch_hub,
     clone_repository_activity,
-    analyze_repository_structure_activity, 
+    analyze_repository_structure_activity,
     get_prompts_config_activity,
     read_prompt_file_activity,
     save_prompt_context_activity,
@@ -21,7 +21,9 @@ from activities.investigate_activities import (
     write_analysis_result_activity,
     cleanup_repository_activity,
     read_dependencies_activity,
-    cache_dependencies_activity
+    cache_dependencies_activity,
+    use_local_repo_activity,
+    write_local_analysis_activity,
 )
 from activities.investigation_cache_activities import (
     check_if_repo_needs_investigation,
@@ -348,32 +350,52 @@ class InvestigateSingleRepoWorkflow:
             # Get updated context with data reference key
             updated_context = save_result["context"]
             
-            # Execute Claude analysis using PromptContext with prompt-level caching
-            logger.info(f"Calling Claude for step: {step_name}")
+            # Execute analysis: Claude (AI mode) or static analysis (no-AI mode)
             # Get latest_commit from workflow state (passed from parent)
             latest_commit = getattr(self, '_latest_commit', None)
-            
+
+            # Check ENABLE_AI toggle to route to appropriate analyzer
+            from investigator.core.config import Config
+            enable_ai = Config.ENABLE_AI
+
             # Create Pydantic input model
-            claude_input = AnalyzeWithClaudeInput(
+            analysis_input = AnalyzeWithClaudeInput(
                 context_dict=PromptContextDict(**updated_context),
                 config_overrides=ClaudeConfigOverrides(**config_overrides.model_dump()) if config_overrides else None,
-                latest_commit=latest_commit
+                latest_commit=latest_commit,
+                repo_path=getattr(self, '_repo_path', None) if not enable_ai else None,
             )
-            
-            claude_result = await workflow.execute_activity(
-                analyze_with_claude_context,
-                args=[claude_input],
-                start_to_close_timeout=timedelta(minutes=15),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=3,
-                    initial_interval=timedelta(seconds=5),
-                    maximum_interval=timedelta(seconds=30),
-                    backoff_coefficient=2.0
-                ),
-            )
-            
+
+            if enable_ai:
+                logger.info(f"Calling Claude for step: {step_name}")
+                claude_result = await workflow.execute_activity(
+                    analyze_with_claude_context,
+                    args=[analysis_input],
+                    start_to_close_timeout=timedelta(minutes=15),
+                    retry_policy=RetryPolicy(
+                        maximum_attempts=3,
+                        initial_interval=timedelta(seconds=5),
+                        maximum_interval=timedelta(seconds=30),
+                        backoff_coefficient=2.0
+                    ),
+                )
+            else:
+                # Lazy import to avoid Temporal sandbox issues with pydantic_core
+                from activities.static_analysis_activities import analyze_with_static_context
+                logger.info(f"Running static analysis for step: {step_name} (ENABLE_AI=false)")
+                claude_result = await workflow.execute_activity(
+                    analyze_with_static_context,
+                    args=[analysis_input],
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=RetryPolicy(
+                        maximum_attempts=2,
+                        initial_interval=timedelta(seconds=2),
+                        maximum_interval=timedelta(seconds=10),
+                    ),
+                )
+
             if claude_result.status != "success":
-                raise Exception(f"Claude analysis failed for step {step_name}")
+                raise Exception(f"Analysis failed for step {step_name}")
             
             # Log if result was from cache
             if claude_result.cached:
@@ -614,23 +636,47 @@ class InvestigateSingleRepoWorkflow:
         repo_type = request.repo_type or "generic"
         force = request.force
         config_overrides = request.config_overrides or ConfigOverrides()
-        
+        local_mode = request.local_mode
+        output_dir = request.output_dir
+
+        # Derive local filesystem path from file:// URI
+        is_local_repo = repo_url.startswith("file://")
+        local_path = repo_url[7:] if is_local_repo else None  # strip file:// scheme
+
         # Initialize workflow state
         self._repo_name = repo_name
         self._status = "started"
         self._last_heartbeat = workflow.now()
         self._latest_commit = None  # Will be set after cache check
-        
+        self._repo_path = None  # Will be set after clone/local repo setup
+
         logger.info(f"Starting investigation for repository: {repo_name} (type: {repo_type})")
+        if local_mode:
+            logger.info(f"📂 Local mode enabled for {repo_name}")
         if force:
             logger.info(f"⚡ Force mode enabled for {repo_name} - will investigate regardless of cache")
-        
+
         # Step 0: DynamoDB Health Check
         await self._perform_health_check()
-        
-        # Step 1: Clone the repository
-        clone_result = await self._clone_repository(repo_url, repo_name)
+
+        # Step 1: Clone the repository OR use local file:// path
+        if is_local_repo:
+            logger.info(f"📂 Using local repository path: {local_path}")
+            local_result = await workflow.execute_activity(
+                use_local_repo_activity,
+                args=[local_path, repo_name],
+                start_to_close_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+            clone_result = CloneRepositoryResult(
+                repo_path=local_result["repo_path"],
+                temp_dir=None,  # No temp dir for local repos
+                status=local_result.get("status", "success"),
+            )
+        else:
+            clone_result = await self._clone_repository(repo_url, repo_name)
         repo_path = clone_result.repo_path
+        self._repo_path = repo_path  # Store for static analysis mode
         temp_dir = clone_result.temp_dir
         
         # Step 1.5: Get prompts configuration early to extract prompt versions for cache comparison
@@ -663,21 +709,23 @@ class InvestigateSingleRepoWorkflow:
             last_investigation = cache_check_result.last_investigation or {}
             
             # Clean up the cloned repository since we're not investigating
-            try:
-                logger.info(f"Cleaning up cloned repository for skipped repo {repo_name}")
-                cleanup_result = await workflow.execute_activity(
-                    cleanup_repository_activity,
-                    args=[repo_path, temp_dir],
-                    start_to_close_timeout=timedelta(minutes=2),
-                    retry_policy=RetryPolicy(
-                        maximum_attempts=1,  # Don't retry cleanup failures
-                        initial_interval=timedelta(seconds=1),
-                    ),
-                )
-                logger.info(f"Cleanup result for skipped repo {repo_name}: {cleanup_result.get('message', 'Unknown')}")
-            except Exception as e:
-                logger.warning(f"Failed to clean up skipped repository {repo_name}: {str(e)}")
-                # Don't fail the workflow due to cleanup issues
+            # Skip cleanup for local repos (we don't own the directory)
+            if not is_local_repo:
+                try:
+                    logger.info(f"Cleaning up cloned repository for skipped repo {repo_name}")
+                    cleanup_result = await workflow.execute_activity(
+                        cleanup_repository_activity,
+                        args=[repo_path, temp_dir],
+                        start_to_close_timeout=timedelta(minutes=2),
+                        retry_policy=RetryPolicy(
+                            maximum_attempts=1,  # Don't retry cleanup failures
+                            initial_interval=timedelta(seconds=1),
+                        ),
+                    )
+                    logger.info(f"Cleanup result for skipped repo {repo_name}: {cleanup_result.get('message', 'Unknown')}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up skipped repository {repo_name}: {str(e)}")
+                    # Don't fail the workflow due to cleanup issues
             
             return InvestigateSingleRepoResult(
                 status="skipped",
@@ -754,22 +802,48 @@ class InvestigateSingleRepoWorkflow:
         self._last_heartbeat = workflow.now()
         self._investigation_progress = investigation_result.status
         
-        # Step 8: If investigation was successful, save to architecture hub
+        # Step 8: Save results — to architecture hub (online) or local dir (local mode)
         if investigation_result.status == "success" and investigation_result.arch_file_content:
-            hub_result = await self._save_to_hub(investigation_result)
-            investigation_result.architecture_hub = {
-                "status": hub_result.status,
-                "message": hub_result.message,
-                "error": hub_result.error
-            }
+            if local_mode:
+                # Local mode: write to local output directory
+                local_output_dir = output_dir or "outputs"
+                logger.info(f"📂 Local mode: saving analysis for {repo_name} to {local_output_dir}/")
+                try:
+                    local_save_result = await workflow.execute_activity(
+                        write_local_analysis_activity,
+                        args=[repo_name, investigation_result.arch_file_content, local_output_dir],
+                        start_to_close_timeout=timedelta(minutes=2),
+                        retry_policy=RetryPolicy(maximum_attempts=2),
+                    )
+                    investigation_result.architecture_hub = {
+                        "status": local_save_result.get("status", "success"),
+                        "message": local_save_result.get("message", "Saved locally"),
+                        "error": None
+                    }
+                except Exception as e:
+                    logger.error(f"Failed to save local analysis for {repo_name}: {str(e)}")
+                    investigation_result.architecture_hub = {
+                        "status": "failed",
+                        "message": f"Local save failed: {str(e)}",
+                        "error": str(e)
+                    }
+                    raise Exception(f"Local analysis save failed: {str(e)}")
+            else:
+                # Online mode: save to architecture hub
+                hub_result = await self._save_to_hub(investigation_result)
+                investigation_result.architecture_hub = {
+                    "status": hub_result.status,
+                    "message": hub_result.message,
+                    "error": hub_result.error
+                }
 
-            # If architecture hub save failed, fail the entire workflow
-            if hub_result.status == "failed":
-                error_msg = f"Architecture hub save failed: {hub_result.message}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
+                # If architecture hub save failed, fail the entire workflow
+                if hub_result.status == "failed":
+                    error_msg = f"Architecture hub save failed: {hub_result.message}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
         else:
-            logger.info(f"Skipping architecture hub save for {repo_name} - investigation not successful or no content")
+            logger.info(f"Skipping save for {repo_name} - investigation not successful or no content")
             investigation_result.architecture_hub = {
                 "status": "skipped",
                 "message": "Investigation not successful or no content to save"
@@ -795,28 +869,33 @@ class InvestigateSingleRepoWorkflow:
             }
         
         # Step 10: Clean up the cloned repository to save space
+        # Skip cleanup for local repos (we don't own the directory)
         cleanup = {}
-        try:
-            logger.info(f"Cleaning up cloned repository for {repo_name}")
-            cleanup_result = await workflow.execute_activity(
-                cleanup_repository_activity,
-                args=[repo_path, temp_dir],
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=1,  # Don't retry cleanup failures
-                    initial_interval=timedelta(seconds=1),
-                ),
-            )
-            logger.info(f"Cleanup result for {repo_name}: {cleanup_result.get('message', 'Unknown')}")
-            cleanup = cleanup_result
-        except Exception as e:
-            logger.warning(f"Failed to clean up repository {repo_name}: {str(e)}")
-            # Don't fail the workflow due to cleanup issues
-            cleanup = {
-                "status": "failed",
-                "error": str(e),
-                "message": f"Cleanup failed: {str(e)}"
-            }
+        if is_local_repo:
+            logger.info(f"📂 Skipping cleanup for local repository {repo_name}")
+            cleanup = {"status": "skipped", "message": "Local repository - cleanup skipped"}
+        else:
+            try:
+                logger.info(f"Cleaning up cloned repository for {repo_name}")
+                cleanup_result = await workflow.execute_activity(
+                    cleanup_repository_activity,
+                    args=[repo_path, temp_dir],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(
+                        maximum_attempts=1,  # Don't retry cleanup failures
+                        initial_interval=timedelta(seconds=1),
+                    ),
+                )
+                logger.info(f"Cleanup result for {repo_name}: {cleanup_result.get('message', 'Unknown')}")
+                cleanup = cleanup_result
+            except Exception as e:
+                logger.warning(f"Failed to clean up repository {repo_name}: {str(e)}")
+                # Don't fail the workflow due to cleanup issues
+                cleanup = {
+                    "status": "failed",
+                    "error": str(e),
+                    "message": f"Cleanup failed: {str(e)}"
+                }
         
         return InvestigateSingleRepoResult(
             status=investigation_result.status,

@@ -39,7 +39,7 @@ In `prompts/repos.json`:
 {
   "repositories": {
     "repo-name": {
-      "url": "https://github.com/org/repo",
+      "uri": "https://github.com/org/repo",
       "description": "Repository description",
       "type": "backend"  // <-- Repository type
     }
@@ -61,7 +61,7 @@ In `prompts/repos.json`:
 1. Add the repository to `repos.json`:
 ```json
 "new-repo": {
-  "url": "https://github.com/org/new-repo",
+  "uri": "https://github.com/org/new-repo",
   "description": "New repository",
   "type": "backend"  // Choose appropriate type
 }

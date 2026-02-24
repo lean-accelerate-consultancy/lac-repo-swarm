@@ -123,6 +123,26 @@ production-workflow = "scripts/workflow.sh"
 # Use when: bulk repository analysis, testing multiple repos locally, or development workflow testing
 investigate-all = "scripts/full.sh"
 
+# Run local/offline investigation of repos on disk with optional Mermaid diagram generation
+# Scans local repos (configured via file:// URIs in repos.json), analyses with Claude, saves everything locally
+# Requires CREATE_DIAGRAMS=true in .env.local to generate Mermaid diagrams
+# Requires Temporal server (mise dev-server) and worker (mise dev-worker) to be running
+# Usage: mise investigate-local [ARGUMENTS]
+# Arguments (can be used in any order):
+#   force                 Forces investigation of all repos ignoring cache
+#   model MODEL_NAME      Override Claude model to use
+#   max-tokens NUMBER     Override max tokens (100-100000)
+#   chunk-size NUMBER     Override number of repos to process in parallel (1-20)
+#   output-dir DIR        Override output directory (default: outputs)
+#   h                    Show help message
+# Examples:
+#   mise investigate-local                              # Default settings
+#   mise investigate-local force                        # Force investigation
+#   mise investigate-local chunk-size 4                 # Process 4 repos in parallel
+#   mise investigate-local force output-dir my-output   # Force with custom output dir
+# Use when: offline/local repository analysis, generating cross-repo Mermaid diagrams, or running without GitHub access
+investigate-local = "scripts/local.sh $@"
+
 # Run single repository investigation locally for testing
 # Always uses .env.local for local testing configuration
 # Default repository is "is-odd" if not specified
@@ -211,6 +231,23 @@ dev-repos-update = """
     echo "✨ Repository list updated successfully!"
 """
 
+
+# Build the Mermaid rendering Docker image
+# Builds a Docker image with Node.js + Chromium + mermaid-cli for rendering diagrams to PNG
+# Use when: setting up mermaid PNG rendering, first time setup for diagram generation
+mermaid-build = "docker build -f Dockerfile.mermaid -t repo-swarm-mermaid:local ."
+
+# Test Mermaid rendering with a sample diagram
+# Renders a simple test diagram to verify the mermaid Docker image works correctly
+# Use when: verifying mermaid setup, debugging rendering issues
+mermaid-test = """
+    mkdir -p outputs/diagrams/_test && \
+    echo "graph TD; A-->B; B-->C;" > outputs/diagrams/_test/test.mmd && \
+    docker run --rm -v "$(pwd)/outputs/diagrams/_test:/data" repo-swarm-mermaid:local -i /data/test.mmd -o /data/test.png && \
+    echo "✅ Mermaid rendering test passed!" && \
+    ls -lh outputs/diagrams/_test/test.png && \
+    rm -rf outputs/diagrams/_test
+"""
 
 # Build Docker image only (no cache)
 # Builds the Docker image without using cache for clean builds

@@ -211,10 +211,10 @@ class TestInvestigationCache(unittest.TestCase):
         )
         
         # Assert
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "failed")
         self.assertIn(error_message, result["message"])
         self.assertIsNone(result["timestamp"])
-    
+
     def test_save_investigation_metadata_with_no_analysis_summary_should_save_successfully(self):
         """Test saving metadata without analysis summary."""
         # Arrange

@@ -297,7 +297,7 @@ def update_repos_json(repos: List[Dict], existing_repos_file: str) -> None:
         
         # Add new repository entry
         all_repos[repo_name] = {
-            "url": repo["html_url"],
+            "uri": repo["html_url"],
             "description": repo.get("description", "No description available") or "No description available",
             "type": repo_type
         }
@@ -306,7 +306,7 @@ def update_repos_json(repos: List[Dict], existing_repos_file: str) -> None:
     # Update the data structure
     default_repo = existing_data.get("default")
     if default_repo is None:
-        raise ValueError("The 'default' field in repos.json cannot be None. Please set a valid default repository URL.")
+        raise ValueError("The 'default' field in repos.json cannot be None. Please set a valid default repository URI.")
     
     updated_data = {
         "default": existing_data.get("default", Config.DEFAULT_REPO_URL),

@@ -1642,4 +1642,98 @@ async def cache_dependencies_activity(repo_name: str, dependencies_data: dict) -
             "status": "failed",
             "deps_reference_key": None,
             "error": str(e)
-        } 
+        }
+
+
+@activity.defn
+async def use_local_repo_activity(local_path: str, repo_name: str) -> dict:
+    """
+    Activity to use a local repository instead of cloning from GitHub.
+
+    Validates the local path exists and is a git repository, then returns
+    the same structure as clone_repository_activity for compatibility.
+
+    Args:
+        local_path: Local filesystem path to the repository
+        repo_name: Name of the repository
+
+    Returns:
+        Dictionary with repo_path, temp_dir (None), and status
+    """
+    activity.logger.info(f"Using local repository for {repo_name}: {local_path}")
+
+    try:
+        import os
+
+        # Validate path exists
+        if not os.path.exists(local_path):
+            raise Exception(f"Local repository path does not exist: {local_path}")
+
+        if not os.path.isdir(local_path):
+            raise Exception(f"Local repository path is not a directory: {local_path}")
+
+        # Check if it's a git repository
+        git_dir = os.path.join(local_path, ".git")
+        if not os.path.exists(git_dir):
+            activity.logger.warning(f"Path {local_path} does not appear to be a git repo (no .git dir)")
+            # Still allow it — the user might have a valid repo structure without .git
+
+        activity.logger.info(f"Local repository validated: {local_path}")
+
+        return {
+            "status": "success",
+            "repo_path": str(local_path),
+            "temp_dir": None,  # We don't own this directory, so no cleanup
+            "repo_name": repo_name
+        }
+
+    except Exception as e:
+        activity.logger.error(f"Failed to use local repository {repo_name}: {str(e)}")
+        raise Exception(f"Failed to use local repository: {str(e)}") from e
+
+
+@activity.defn
+async def write_local_analysis_activity(repo_name: str, analysis_content: str, output_dir: str = "outputs") -> dict:
+    """
+    Activity to write analysis results to a local output directory.
+
+    Used in local mode instead of saving to architecture hub.
+
+    Args:
+        repo_name: Name of the repository
+        analysis_content: The analysis content to write
+        output_dir: Local output directory (defaults to 'outputs/')
+
+    Returns:
+        Dictionary with the path to the written file
+    """
+    activity.logger.info(f"Writing local analysis for {repo_name} to {output_dir}")
+
+    try:
+        import os
+
+        # Get the project root (parent of src/)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        full_output_dir = os.path.join(project_root, output_dir)
+
+        # Create output directory if it doesn't exist
+        os.makedirs(full_output_dir, exist_ok=True)
+
+        # Write the analysis file
+        filename = f"{repo_name}-arch.md"
+        file_path = os.path.join(full_output_dir, filename)
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(analysis_content)
+
+        activity.logger.info(f"Local analysis written to: {file_path} ({len(analysis_content)} chars)")
+
+        return {
+            "status": "success",
+            "arch_file_path": file_path,
+            "message": f"Analysis written to {file_path}"
+        }
+
+    except Exception as e:
+        activity.logger.error(f"Failed to write local analysis for {repo_name}: {str(e)}")
+        raise Exception(f"Failed to write local analysis: {str(e)}") from e

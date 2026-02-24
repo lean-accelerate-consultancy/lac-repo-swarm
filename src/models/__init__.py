@@ -54,6 +54,9 @@ from .workflows import (
     SaveToHubResult,
     SaveToDynamoResult,
     InvestigationResult,
+    # Cross-repo analysis models
+    CrossRepoAnalysisRequest,
+    CrossRepoAnalysisResult,
 )
 
 __all__ = [
@@ -96,4 +99,7 @@ __all__ = [
     "SaveToHubResult",
     "SaveToDynamoResult",
     "InvestigationResult",
+    # Cross-repo analysis
+    "CrossRepoAnalysisRequest",
+    "CrossRepoAnalysisResult",
 ]
