@@ -99,7 +99,7 @@ Each mode requires different env vars in `.env.local` -- see `env.local.example`
 
 - Python 3.12 (managed via mise)
 - Anthropic API key with credits at [console.anthropic.com](https://console.anthropic.com) -- not needed for Mode 5/6
-- Docker (via Colima or Docker Desktop) -- only needed for PNG rendering
+- Docker (via Colima or Docker Desktop) -- only needed for PNG rendering (Colima is auto-started if not running)
 - For Mode 1/4/5/6: repos cloned locally
 - For Mode 2/3: GitHub token with repo scope
 
@@ -267,8 +267,10 @@ Use this when analysing repos already cloned locally (no GitHub access needed):
 
 Skip this step if you set `RENDER_MERMAID_PNGS=false`.
 
+> **Note:** Colima is auto-started by the rendering activity if it's not running. You only need to start it manually for the initial image build below.
+
 ```bash
-# Start Docker runtime
+# Start Docker runtime (if not already running)
 colima start
 
 # Build the mermaid rendering image
@@ -277,6 +279,8 @@ mise mermaid-build
 # Verify it works
 mise mermaid-test
 ```
+
+**Corporate proxy / custom CA bundle (optional):** If you're behind a corporate proxy, place your CA bundle as `tls-ca-bundle.pem` in the project root before building. The Dockerfile will automatically pick it up and configure `NODE_EXTRA_CA_CERTS`. If the file is absent, the build works normally with default CAs.
 
 ---
 
@@ -452,9 +456,9 @@ Check that `.env.local` has `CREATE_DIAGRAMS=true`. The worker must be restarted
 
 ### PNGs not generated
 1. Check `RENDER_MERMAID_PNGS=true` in `.env.local`
-2. Check Docker is running: `colima status` or `docker info`
+2. Docker/Colima should auto-start, but verify manually if needed: `colima status` or `docker info`
 3. Check the mermaid image exists: `docker images repo-swarm-mermaid:local`
-4. If Docker is unavailable, install mmdc locally as fallback: `npm install -g @mermaid-js/mermaid-cli`
+4. If Docker is unavailable, the system falls back to local `mmdc` automatically. Install it with: `npm install -g @mermaid-js/mermaid-cli`
 
 ### Worker crashes with "Cannot access X from inside a workflow"
 Restart the worker (`Ctrl+C` in terminal 2, then `mise dev-worker`). This is a Temporal sandbox error -- the worker needs the latest code.
