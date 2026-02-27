@@ -243,7 +243,8 @@ mermaid-build = "docker build -f Dockerfile.mermaid -t repo-swarm-mermaid:local 
 mermaid-test = """
     mkdir -p outputs/diagrams/_test && \
     echo "graph TD; A-->B; B-->C;" > outputs/diagrams/_test/test.mmd && \
-    docker run --rm -v "$(pwd)/outputs/diagrams/_test:/data" repo-swarm-mermaid:local -i /data/test.mmd -o /data/test.png && \
+    docker run --rm --user "$(id -u):$(id -g)" \
+        -e HOME=/tmp --shm-size=2gb -v "$(pwd)/outputs/diagrams/_test:/data" repo-swarm-mermaid:local -i /data/test.mmd -o /data/test.png && \
     echo "✅ Mermaid rendering test passed!" && \
     ls -lh outputs/diagrams/_test/test.png && \
     rm -rf outputs/diagrams/_test
@@ -257,7 +258,7 @@ docker-build = "docker build --no-cache -t repo-swarm:local ."
 # Run Docker container with current environment variables
 # Starts the Docker container with environment variables loaded from .env file
 # Use when: testing containerized deployment, verifying environment configuration, or isolated execution
-docker-run = "docker run --rm -it --env-file .env repo-swarm:local"
+docker-run = "docker run --rm -it --shm-size=2gb -v $(pwd):/data --env-file .env repo-swarm:local"
 
 # Build and run Docker container locally
 # Builds and runs the Docker container with conditional caching (pass 'clean' to force rebuild without cache)
@@ -272,7 +273,7 @@ docker-dev = """
         docker build -t repo-swarm:local .
     fi && \
     echo "🚀 Running Docker container..." && \
-    docker run --rm -it --env-file .env repo-swarm:local
+    docker run --rm -it --shm-size=2gb -v $(pwd):/data --env-file .env repo-swarm:local
 """
 
 # Build and run with verbose output for debugging
@@ -281,6 +282,7 @@ docker-dev = """
 docker-debug = """
     docker build --no-cache -t repo-swarm:debug . && \
     docker run --rm -it \
+        --shm-size=2gb -v $(pwd):/data \
         --env-file .env \
         --env PYTHONUNBUFFERED=1 \
         --env LOG_LEVEL=DEBUG \

@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-02-27
+
+### Auto-start Colima/Docker before Mermaid PNG rendering
+
+The Mermaid rendering activity now checks if Docker is running before the rendering loop and auto-starts Colima if it's stopped. This eliminates the repeated per-diagram Docker connection errors in the logs when Colima is not running.
+
+#### Changes
+
+- **src/activities/mermaid_render_activities.py** -- Added `_ensure_docker_running()` helper that checks `docker info`, falls back to `colima status`, and runs `colima start` if needed. Called once before the rendering loop; if Docker is unavailable after the check, all diagrams go straight to local `mmdc` without noisy per-diagram Docker failures.
+
+### Added descriptive filenames to Mermaid PNG outputs
+
+Diagram PNG filenames now include the diagram type and title extracted from YAML front matter, instead of the generic `diagram-NN-diagram.png` naming.
+
+#### Changes
+
+- **src/activities/mermaid_render_activities.py** -- Added `_slugify()` for filesystem-safe title conversion, `_parse_mermaid_content()` to skip YAML front matter and detect diagram type from the first body line. Filenames now follow the pattern `diagram-01-graph-cross-repository-lifecycle.png`. Duplicate type words are stripped from the title slug.
+
+#### Examples
+
+| Before | After |
+|---|---|
+| `diagram-01-diagram.png` | `diagram-01-graph-cross-repository-lifecycle-how-all-repos-work-together.png` |
+| `diagram-05-diagram.png` | `diagram-05-flowchart-data-flow-end-to-end-infrastructure-and-processing-pipeline.png` |
+| `diagram-10-diagram.png` | `diagram-10-sequence-infrastructure-provisioning.png` |
+| `diagram-09-pie.png` | `diagram-09-pie.png` (no title — unchanged) |
+
+### Added external contributors to README
+
+- **README.md** -- Added Lean Accelerate Consultancy as external contributor under Credits section, with link to Usage Guide.
+
+### Fixed Mermaid Docker rendering permissions issue
+
+Fixed permission denied errors when rendering Mermaid diagrams to PNG using Docker container.
+
+#### Changes
+
+- **src/activities/mermaid_render_activities.py** -- Added `--user "$(id -u):$(id -g)"`, `-e HOME=/tmp`, and `--shm-size=2gb` flags to Docker run command to fix EACCES errors when writing PNG files to mounted volumes
+- **mise.toml** -- Updated `mermaid-test` task with same Docker flags for consistency
+
+#### Technical details
+
+The Docker container (`repo-swarm-mermaid:local`) was unable to write PNG output files when using volume mounts because:
+1. Container user UID/GID didn't match host user permissions
+2. Chromium (used by mermaid-cli) requires writable home directory for crash handler and cache
+3. Chromium needs shared memory for rendering
+
+Solution: Run container with host user's UID/GID, set HOME to writable /tmp, and increase shared memory size.
+
 ## 2026-02-22
 
 ### Added AI vs Static Analyser gap analysis table to USAGE_GUIDE

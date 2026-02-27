@@ -7,11 +7,17 @@
 
 FROM node:20-bookworm-slim
 
+# Copy the complete host CA bundle
+COPY tls-ca-bundle.pem /usr/local/share/ca-certificates/tls-ca-bundle.crt
+
 # Install Chromium and rendering dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
     chromium \
     fonts-freefont-ttf \
     fonts-noto-cjk \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -20,6 +26,7 @@ RUN groupadd -r mermaid && useradd -r -g mermaid -G audio,video mermaid \
 
 # Install mermaid-cli
 WORKDIR /app
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/tls-ca-bundle.crt
 RUN npm init -y && npm install @mermaid-js/mermaid-cli \
     && npm cache clean --force
 

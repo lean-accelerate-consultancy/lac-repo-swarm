@@ -209,3 +209,9 @@ outputs*/
 
 # Repo config
 prompts/repos.json
+
+# Ignore local CA bundle
+tls-ca-bundle.pem
+
+# Claude Code
+.claude/
