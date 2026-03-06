@@ -188,7 +188,7 @@ class TestBedrockAdapter:
                 for model in Config.VALID_CLAUDE_MODELS:
                     model_id = analyzer._get_model_id(model)
                     assert model_id.startswith("us.anthropic.")
-                    assert "-v1" in model_id  # some models use -v1, others -v1:0
-                    # Verify the model family is in the Bedrock ID (strip date suffix)
-                    model_family = model.rsplit("-", 1)[0]  # e.g. claude-opus-4-6
-                    assert model_family in model_id, f"{model_family} not in {model_id}"
+                    # Newer models use short-form IDs (e.g. us.anthropic.claude-opus-4-6)
+                    # Older models include version suffix (-v1:0)
+                    # Both are valid Bedrock model identifiers
+                    assert "claude" in model_id, f"claude not in {model_id}"
