@@ -3,7 +3,7 @@
   "_comment": "Available types: generic, backend, frontend, mobile, infra-as-code, libraries",
   "repositories": {
     "repo-swarm": {
-      "url": "https://github.com/royosherove/repo-swarm",
+      "url": "https://github.com/reposwarm/reposwarm",
       "description": "AI-powered multi-repo architecture discovery platform",
       "type": "backend"
     },
