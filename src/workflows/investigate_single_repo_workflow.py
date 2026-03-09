@@ -124,7 +124,7 @@ class InvestigateSingleRepoWorkflow:
         clone_result = await workflow.execute_activity(
             clone_repository_activity,
             args=[repo_url, repo_name],
-            start_to_close_timeout=timedelta(minutes=3),
+            start_to_close_timeout=timedelta(minutes=10),
             retry_policy=RetryPolicy(
                 maximum_attempts=3,
                 initial_interval=timedelta(seconds=5),
@@ -260,7 +260,9 @@ class InvestigateSingleRepoWorkflow:
 
         return {
             "deps_reference_key": deps_reference_key,
-            "formatted_content": deps_data["formatted_content"]
+            "formatted_content": deps_data["formatted_content"],
+            "needs_batching": deps_data.get("needs_batching", False),
+            "total_tokens_estimate": deps_data.get("total_tokens_estimate", 0),
         }
 
     async def _process_map_reduce_step(self, step: dict, prompts_dir: str,

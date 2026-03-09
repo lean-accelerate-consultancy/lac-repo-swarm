@@ -781,7 +781,7 @@ class DynamoDBClient:
                 
                 # Check if data is chunked
                 if item.get('is_chunked', False):
-                    return self._get_chunked_analysis_data(reference_key, item.get('total_chunks', 0))
+                    return self._get_chunked_analysis_data(reference_key, int(item.get('total_chunks', 0)))
                 
                 # Check if data is compressed
                 if item.get('is_compressed', False):

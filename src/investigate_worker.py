@@ -258,8 +258,13 @@ async def main():
         worker_kwargs = {}
         if parallel > 0:
             worker_kwargs['max_concurrent_activities'] = parallel
-            worker_kwargs['max_concurrent_workflow_task_polls'] = parallel
+            worker_kwargs['max_concurrent_workflow_task_polls'] = max(parallel, 2)
             logger.info(f"  Concurrency limited to {parallel} (REPOSWARM_PARALLEL)")
+
+        # Newer Temporal SDK requires workflow_task_poller_behavior >= 2 when caching workflows
+        worker_kwargs['max_concurrent_workflow_task_polls'] = max(
+            worker_kwargs.get('max_concurrent_workflow_task_polls', 2), 2
+        )
 
         worker = Worker(
             client,
