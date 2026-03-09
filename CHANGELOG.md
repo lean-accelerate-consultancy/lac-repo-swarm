@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-09 — Fix map-reduce deployment issues for large repos
+
+### Problems
+
+During live testing with quarkus (2,214 dependency files, 13.4MB raw), the map-reduce pipeline failed at the batch creation stage with `'decimal.Decimal' object cannot be interpreted as an integer`. Three additional deployment issues were also discovered.
+
+### Fixes
+
+1. **DynamoDB chunked data retrieval** — boto3 returns numeric fields as `decimal.Decimal`, but Python's `range()` requires `int`. The `total_chunks` field was passed directly to `range()` in `_get_chunked_analysis_data()`, causing all chunked data retrieval to fail silently. Cast to `int()`.
+2. **Clone timeout too short** — quarkus takes ~3.5 minutes to `git clone`. The 3-minute `start_to_close_timeout` caused repeated timeouts. Bumped to 10 minutes.
+3. **Temporal SDK compatibility** — Newer Temporal SDK requires `max_concurrent_workflow_task_polls >= 2` when caching workflows. Ensured the minimum is always met.
+4. **Map-reduce never triggered** — `_read_and_cache_dependencies()` was stripping `needs_batching` and `total_tokens_estimate` from its return dict, so the map-reduce detection logic in `_process_analysis_steps()` never saw `needs_batching=True`.
+
+### Changes
+
+- **`src/utils/dynamodb_client.py`** — Cast `total_chunks` to `int` before passing to `_get_chunked_analysis_data()`.
+- **`src/workflows/investigate_single_repo_workflow.py`** — Bumped clone timeout from 3 to 10 minutes. Added `needs_batching` and `total_tokens_estimate` to the return dict from `_read_and_cache_dependencies()`.
+- **`src/investigate_worker.py`** — Ensured `max_concurrent_workflow_task_polls >= 2` regardless of `REPOSWARM_PARALLEL` setting.
+
+### Test Results
+
+Quarkus completed full investigation via map-reduce: 21 batches, 17 analysis steps, 219,326 characters of final output. No truncation needed.
+
+---
+
 ## 2026-03-08 — Map-reduce batching for large dependency analysis
 
 ### Problem
